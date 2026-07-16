@@ -4,6 +4,21 @@ Gerenciador de músicas para karaokê — baixa vídeos do YouTube, renomeia aut
 
 ---
 
+## Download
+
+**Opção A — Git (recomendado):**
+```bash
+git clone https://github.com/disouz4-dev/yt-downloader.git
+cd yt-downloader
+```
+
+**Opção B — Arquivo ZIP:**
+1. Clique em **Code → Download ZIP** no topo desta página
+2. Extraia a pasta onde quiser
+3. Abra o terminal dentro da pasta extraída
+
+---
+
 ## Funcionalidades
 
 - **Download inteligente** — baixa playlists/canais inteiros, pula vídeos já baixados (por ID e por título normalizado)
