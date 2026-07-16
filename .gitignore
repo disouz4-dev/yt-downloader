@@ -1,0 +1,30 @@
+# Banco de dados e archive locais
+.voxly_db.json
+.voxly_yt_archive.txt
+~/.voxly_*.json
+~/.voxly_*.txt
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+*.spec
+
+# Ambiente virtual
+venv/
+.venv/
+env/
+
+# Config local
+*.env
+.env*
+
+# Sistema
+.DS_Store
+Thumbs.db
+*.log
