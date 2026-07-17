@@ -17,6 +17,20 @@ Ou clique em **Code → Download ZIP** no topo desta página e extraia a pasta.
 
 ## Instalação — Windows
 
+### Método rápido (recomendado)
+
+1. Baixe o ZIP do repositório: **Code → Download ZIP**
+2. Extraia em qualquer pasta
+3. Dê dois cliques em **`instalar.bat`**
+
+O instalador verifica o Python, instala todas as dependências e cria a pasta **`Voxly Downloader`** na sua Área de Trabalho com o atalho **`Abrir Voxly.bat`**.
+
+> Para atualizar depois: baixe o ZIP de novo, extraia e dê dois cliques em **`atualizar.bat`**.
+
+---
+
+### Pré-requisitos obrigatórios (instalar antes de rodar o bat)
+
 ### 1. Instalar Python 3.12
 
 Baixe em **https://www.python.org/downloads/**

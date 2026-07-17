@@ -2990,7 +2990,29 @@ class App(tk.Tk):
             messagebox.showerror("Erro ao buscar duplicatas", str(e), parent=self)
 
 
+def _criar_atalho_desktop():
+    """Cria atalho na Área de Trabalho do Windows na primeira execução."""
+    if os.name != "nt":
+        return
+    try:
+        import sys, pathlib
+        desktop = pathlib.Path.home() / "Desktop"
+        bat = desktop / "Abrir Voxly.bat"
+        if bat.exists():
+            return
+        script = pathlib.Path(sys.executable).parent / "Scripts" / "voxly.exe"
+        if not script.exists():
+            script = pathlib.Path(sys.executable)
+        bat.write_text(
+            f'@echo off\n"{script}" -c "from renomear_musicas import main; main()"\nif errorlevel 1 pause\n',
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+
 def main():
+    _criar_atalho_desktop()
     App().mainloop()
 
 if __name__ == "__main__":
