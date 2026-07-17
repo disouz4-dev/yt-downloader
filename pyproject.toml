@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "voxly-downloader"
+version = "1.0.0"
+description = "Gerenciador de músicas para karaokê — downloader YouTube + renomeador iTunes"
+requires-python = ">=3.11"
+dependencies = [
+    "yt-dlp>=2026.6.9",
+    "openai>=1.30.0",
+    "requests>=2.31.0",
+    "Pillow>=10.0.0",
+    "yt-dlp-ejs>=0.8.0",
+    "static-ffmpeg>=2.5",
+    "secretstorage>=3.3.0; sys_platform == 'linux'",
+]
+
+[project.scripts]
+voxly = "renomear_musicas:main"
+
+[tool.setuptools]
+py-modules = ["renomear_musicas"]

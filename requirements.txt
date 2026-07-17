@@ -1,5 +1,7 @@
 yt-dlp>=2026.6.9
+openai>=1.30.0
 requests>=2.31.0
 Pillow>=10.0.0
-secretstorage>=3.3.0
 yt-dlp-ejs>=0.8.0
+static-ffmpeg>=2.5
+secretstorage>=3.3.0; sys_platform == "linux"

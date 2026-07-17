@@ -9,6 +9,14 @@ import subprocess
 import urllib.request
 import urllib.parse
 import unicodedata
+
+# Garante ffmpeg disponível mesmo sem instalação manual
+try:
+    import static_ffmpeg
+    static_ffmpeg.add_paths()
+except ImportError:
+    pass  # ffmpeg já no PATH ou usuário instalou manualmente
+
 import tkinter as tk
 from tkinter import filedialog, ttk, messagebox
 from openai import OpenAI, RateLimitError, APIError
@@ -2975,5 +2983,8 @@ class App(tk.Tk):
             messagebox.showerror("Erro ao buscar duplicatas", str(e), parent=self)
 
 
-if __name__ == "__main__":
+def main():
     App().mainloop()
+
+if __name__ == "__main__":
+    main()
