@@ -1444,14 +1444,8 @@ class DownloadWindow(tk.Frame):
                 res = buscar_itunes(nome_limpo)
                 if res:
                     self._log(f"  🍎 iTunes OK", "info")
-                elif self.parent.gerenciador:
-                    res = self.parent.gerenciador.interpretar(filepath, nome_limpo=nome_limpo)
-                    if res:
-                        self._log(f"  🤖 IA OK", "info")
                 else:
-                    res = None
-                if not res:
-                    self._log(f"  ⚠️ Não identificado — mantendo nome original", "info")
+                    self._log(f"  ⚠️ Não encontrado no iTunes — mantendo nome original", "info")
                     return
                 artista = normalizar_case(limpar_ruido(res.get("artista", "").strip()))
                 musica  = normalizar_case(limpar_ruido(res.get("musica",  "").strip()))
