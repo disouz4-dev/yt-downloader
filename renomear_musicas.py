@@ -22,6 +22,20 @@ from tkinter import filedialog, ttk, messagebox
 from openai import OpenAI, RateLimitError, APIError
 import yt_dlp
 
+def _notificar(titulo: str, msg: str) -> None:
+    """Notificação de sistema cross-platform (falha silenciosa)."""
+    try:
+        if os.name == "nt":
+            from ctypes import windll
+            windll.user32.MessageBeep(0)
+        else:
+            subprocess.Popen(
+                ["notify-send", "-i", "dialog-information", titulo, msg],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+    except Exception:
+        pass
+
 CONFIG_FILE  = os.path.expanduser("~/.voxly_renomeador.json")
 DB_FILE      = os.path.expanduser("~/.voxly_db.json")
 YT_ARCHIVE   = os.path.expanduser("~/.voxly_yt_archive.txt")
@@ -863,7 +877,10 @@ class DuplicatasWindow(tk.Toplevel):
 
     def _play(self, caminho):
         try:
-            subprocess.Popen(["xdg-open", caminho])
+            if os.name == "nt":
+                os.startfile(caminho)
+            else:
+                subprocess.Popen(["xdg-open", caminho])
         except Exception as e:
             messagebox.showerror("Erro ao reproduzir",
                                   f"Não foi possível abrir:\n{caminho}\n\n{e}", parent=self)
@@ -940,7 +957,8 @@ class DuplicatasWindow(tk.Toplevel):
 
 
 # ── Download Window ─────────────────────────────────────────
-_FFMPEG_OK = bool(subprocess.run(["which", "ffmpeg"], capture_output=True).returncode == 0)
+import shutil as _shutil
+_FFMPEG_OK = bool(_shutil.which("ffmpeg"))
 
 _RE_STREAM_TEMP  = re.compile(r'\.f\d+\.')   # ex: Song.f137.mp4 — stream intermediária antes do merge
 _RE_ANSI         = re.compile(r'(\x1b\[|\[)[0-9;]*m')  # códigos de cor ANSI / yt-dlp bare brackets
@@ -2140,10 +2158,7 @@ class DownloadWindow(tk.Frame):
         self.after(0, lambda: self.progress.configure(value=0))
         self.after(0, lambda: self.progress_total.configure(value=0))
 
-        try:
-            subprocess.Popen(["notify-send", "-i", "dialog-information", "Voxly Download", msg])
-        except Exception:
-            pass
+        _notificar("Voxly Download", msg)
 
         # Só atualiza pasta no app; análise automática é desnecessária pois rename já ocorreu
         if baixados > 0 and not cancelado:
@@ -2712,11 +2727,7 @@ class App(tk.Tk):
                      ". Revise e renomeie."))
             self.after(0, lambda: self.lbl_slot.config(
                 text=f"Slot: {self.gerenciador.status()}", fg="#00e676"))
-            try:
-                subprocess.Popen(["notify-send", "-i", "dialog-information",
-                                  "Voxly Renomeador", msg])
-            except Exception:
-                pass
+            _notificar("Voxly Renomeador", msg)
         finally:
             self.after(0, lambda: self.btn_duplicatas.config(state="normal"))
             tem_erros = any(r["status"] == "Erro" for r in self.resultados)
@@ -2764,11 +2775,7 @@ class App(tk.Tk):
         self.lbl_status.config(
             text=f"✅ Auto-renomeado: {ok} arquivo(s)" + (f" · ❌ {erros} erro(s)" if erros else ""))
         self._atualizar_contagem()
-        try:
-            subprocess.Popen(["notify-send", "-i", "dialog-information",
-                              "Voxly Renomeador", f"Renomeado: {ok} arquivo(s)"])
-        except Exception:
-            pass
+        _notificar("Voxly Renomeador", f"Renomeado: {ok} arquivo(s)")
 
     def _inserir_linha(self, r, tag):
         if r["status"] == "Igual":
@@ -2961,8 +2968,7 @@ class App(tk.Tk):
             state="normal" if te else "disabled"))
         self.after(0, lambda: self.btn_duplicatas.config(state="normal"))
         self.after(0, lambda: self.lbl_status.config(text="✅ Retentativa concluída."))
-        subprocess.Popen(["notify-send", "-i", "dialog-information",
-                          "Voxly Renomeador", "Retentativa concluída."])
+        _notificar("Voxly Renomeador", "Retentativa concluída.")
 
     def _abrir_duplicatas(self):
         try:
