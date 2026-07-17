@@ -2045,10 +2045,11 @@ class DownloadWindow(tk.Frame):
                 "nooverwrites":            True,
                 "ignoreerrors":            True,
                 "logger":                  logger,
+                "noplaylist":              not eh_colecao,  # vídeo único: ignora &list= na URL
                 "extractor_args": {
                     "youtubetab": {"skip": ["authcheck"]},
                 },
-                "js_runtimes":        {"node": {}},  # Node.js v22 instalado
+                "js_runtimes":        {"node": {}},
                 "sleep_interval":     2,
                 "max_sleep_interval": 5,
             }
