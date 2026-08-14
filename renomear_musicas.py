@@ -17,8 +17,28 @@ try:
 except ImportError:
     pass  # ffmpeg já no PATH ou usuário instalou manualmente
 
+# Atualiza PATH para detectar Node.js e outras ferramentas recém-instaladas
+if os.name == "nt":
+    import ctypes
+    _machine = subprocess.run(
+        ["reg", "query", r"HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment",
+         "/v", "Path"], capture_output=True, text=True
+    ).stdout
+    _user = subprocess.run(
+        ["reg", "query", r"HKCU\Environment", "/v", "Path"],
+        capture_output=True, text=True
+    ).stdout
+    for _out in (_machine, _user):
+        for _line in _out.splitlines():
+            if "REG_" in _line:
+                _paths = _line.split("REG_SZ")[-1].strip() if "REG_SZ" in _line else _line.split("REG_EXPAND_SZ")[-1].strip()
+                for _p in _paths.split(";"):
+                    _p = os.path.expandvars(_p.strip())
+                    if _p and _p not in os.environ.get("PATH", ""):
+                        os.environ["PATH"] = os.environ.get("PATH", "") + ";" + _p
+
 import tkinter as tk
-from tkinter import filedialog, ttk, messagebox
+from tkinter import filedialog, ttk, messagebox, scrolledtext
 from openai import OpenAI, RateLimitError, APIError
 import yt_dlp
 
@@ -1444,8 +1464,14 @@ class DownloadWindow(tk.Frame):
                 res = buscar_itunes(nome_limpo)
                 if res:
                     self._log(f"  🍎 iTunes OK", "info")
+                elif self.parent.gerenciador:
+                    res = self.parent.gerenciador.interpretar(filepath, nome_limpo=nome_limpo)
+                    if res:
+                        self._log(f"  🤖 IA OK", "info")
                 else:
-                    self._log(f"  ⚠️ Não encontrado no iTunes — mantendo nome original", "info")
+                    res = None
+                if not res:
+                    self._log(f"  ⚠️ Não identificado — mantendo nome original", "info")
                     return
                 artista = normalizar_case(limpar_ruido(res.get("artista", "").strip()))
                 musica  = normalizar_case(limpar_ruido(res.get("musica",  "").strip()))
@@ -2328,6 +2354,801 @@ class App(tk.Tk):
                   bg="#e65100", fg="white", font=("Segoe UI", 9, "bold"),
                   relief="flat", padx=12, pady=6, cursor="hand2").pack(side="left", padx=8)
 
+        # ── Tab 3: Conversão / Verificação ───────────────────
+        tab_conv = tk.Frame(nb, bg="#0d0d1a")
+        nb.add(tab_conv, text="  🎬 Converter  ")
+
+        # Cabeçalho
+        hdr_c = tk.Frame(tab_conv, bg="#16213e", pady=10)
+        hdr_c.pack(fill="x")
+        tk.Label(hdr_c, text="🎬 Verificar e Converter Vídeos",
+                 font=("Segoe UI", 13, "bold"), bg="#16213e", fg="#e040fb").pack(side="left", padx=16)
+        tk.Label(hdr_c, text="Elimina corrompidos • Converte para 720p H.264",
+                 font=("Segoe UI", 8), bg="#16213e", fg="#555577").pack(side="left", padx=8)
+
+        # Controles
+        ctrl_c = tk.Frame(tab_conv, bg="#1a1a2e", pady=8)
+        ctrl_c.pack(fill="x")
+
+        tk.Label(ctrl_c, text="  📁 Pasta:", bg="#1a1a2e", fg="#7a7a9d",
+                 font=("Segoe UI", 9)).pack(side="left")
+        self._conv_pasta_var = tk.StringVar()
+        self._conv_pasta_entry = tk.Entry(ctrl_c, textvariable=self._conv_pasta_var,
+                                          font=("Segoe UI", 9), bg="#0d0d1a", fg="#e8e8ff",
+                                          insertbackground="#e8e8ff", relief="flat", bd=4)
+        self._conv_pasta_entry.pack(side="left", fill="x", expand=True, padx=8)
+
+        tk.Button(ctrl_c, text="📁", command=self._conv_selecionar_pasta,
+                  bg="#7c4dff", fg="white", font=("Segoe UI", 9),
+                  relief="flat", padx=8, pady=4, cursor="hand2").pack(side="left", padx=(0, 8))
+
+        tk.Label(ctrl_c, text="Resolução:", bg="#1a1a2e", fg="#7a7a9d",
+                 font=("Segoe UI", 9)).pack(side="left")
+        self._conv_resolucao = tk.StringVar(value="720")
+        res_cb = ttk.Combobox(ctrl_c, textvariable=self._conv_resolucao,
+                              values=["360", "480", "720", "1080"], width=5, state="readonly")
+        res_cb.pack(side="left", padx=(4, 4))
+        tk.Label(ctrl_c, text="p", bg="#1a1a2e", fg="#7a7a9d",
+                 font=("Segoe UI", 9)).pack(side="left", padx=(0, 12))
+
+        # Botões de ação
+        btns_c = tk.Frame(tab_conv, bg="#0d0d1a", pady=6)
+        btns_c.pack(fill="x")
+
+        self._conv_btn_verificar = tk.Button(
+            btns_c, text="🔍 Verificar e Limpar Corrompidos",
+            command=lambda: self._conv_iniciar("verificar"),
+            bg="#e94560", fg="white", font=("Segoe UI", 10, "bold"),
+            relief="flat", padx=16, pady=6, cursor="hand2")
+        self._conv_btn_verificar.pack(side="left", padx=(16, 8))
+
+        self._conv_btn_converter = tk.Button(
+            btns_c, text="🔄 Converter para 720p",
+            command=lambda: self._conv_iniciar("converter"),
+            bg="#0984e3", fg="white", font=("Segoe UI", 10, "bold"),
+            relief="flat", padx=16, pady=6, cursor="hand2")
+        self._conv_btn_converter.pack(side="left", padx=(0, 8))
+
+        self._conv_btn_cancelar = tk.Button(
+            btns_c, text="⛔ Cancelar",
+            command=self._conv_cancelar,
+            bg="#c62828", fg="white", font=("Segoe UI", 9, "bold"),
+            relief="flat", padx=12, pady=6, cursor="hand2", state="disabled")
+        self._conv_btn_cancelar.pack(side="right", padx=16)
+
+        # Status + progresso
+        self._conv_lbl_status = tk.Label(tab_conv, text="Selecione uma pasta para começar.",
+                                         bg="#0d0d1a", fg="#fdcb6e",
+                                         font=("Segoe UI", 10, "bold"), anchor="w")
+        self._conv_lbl_status.pack(fill="x", padx=16, pady=(8, 2))
+
+        self._conv_lbl_arquivo = tk.Label(tab_conv, text="",
+                                          bg="#0d0d1a", fg="#7a7a9d",
+                                          font=("Segoe UI", 8), anchor="w")
+        self._conv_lbl_arquivo.pack(fill="x", padx=16, pady=(0, 4))
+
+        self._conv_progress = ttk.Progressbar(tab_conv, mode="determinate")
+        self._conv_progress.pack(fill="x", padx=16, pady=(0, 2))
+
+        self._conv_lbl_pct = tk.Label(tab_conv, text="", bg="#0d0d1a", fg="#7a7a9d",
+                                      font=("Segoe UI", 8), anchor="e")
+        self._conv_lbl_pct.pack(fill="x", padx=16)
+
+        # Painel de estatísticas
+        stats_c = tk.Frame(tab_conv, bg="#16213e", pady=6)
+        stats_c.pack(fill="x", padx=16, pady=(6, 4))
+
+        self._conv_stats = {}
+        for chave, rotulo, cor in [
+            ("total",       "Total",         "#e8e8ff"),
+            ("bons",        "✓ Bons",        "#00e676"),
+            ("ruins",       "✗ Corrompidos", "#ff1744"),
+            ("convertidos", "🔄 Convertidos", "#0984e3"),
+            ("pulados",     "⏭ Já no padrão", "#fdcb6e"),
+        ]:
+            card = tk.Frame(stats_c, bg="#0d0d1a", padx=6, pady=4)
+            card.pack(side="left", expand=True, fill="both", padx=3)
+            tk.Label(card, text=rotulo, bg="#0d0d1a", fg="#7a7a9d",
+                     font=("Segoe UI", 7)).pack()
+            lbl = tk.Label(card, text="0", bg="#0d0d1a", fg=cor,
+                           font=("Segoe UI", 14, "bold"))
+            lbl.pack()
+            self._conv_stats[chave] = lbl
+
+        # Log
+        self._conv_log = scrolledtext.ScrolledText(
+            tab_conv, font=("Consolas", 8), bg="#0d0d1a", fg="#e8e8ff",
+            insertbackground="#e8e8ff", relief="flat", bd=6, wrap="word", height=10)
+        self._conv_log.pack(fill="both", expand=True, padx=16, pady=(4, 12))
+        self._conv_log.tag_configure("ok",    foreground="#00e676")
+        self._conv_log.tag_configure("erro",  foreground="#ff1744")
+        self._conv_log.tag_configure("aviso", foreground="#fdcb6e")
+        self._conv_log.tag_configure("info",  foreground="#0984e3")
+        self._conv_log.tag_configure("titulo", foreground="#e040fb",
+                                     font=("Consolas", 9, "bold"))
+
+        self._conv_executando = False
+        self._conv_cancelar_flag = False
+
+        # ── Tab 4: Manutenção ─────────────────────────────────
+        tab_manut = tk.Frame(nb, bg="#0d0d1a")
+        nb.add(tab_manut, text="  🔧 Manutenção  ")
+
+        # Cabeçalho
+        hdr_m = tk.Frame(tab_manut, bg="#16213e", pady=10)
+        hdr_m.pack(fill="x")
+        tk.Label(hdr_m, text="🔧 Verificação e Atualização de Plugins",
+                 font=("Segoe UI", 13, "bold"), bg="#16213e", fg="#e040fb").pack(side="left", padx=16)
+
+        # Barra de progresso geral
+        prog_m_frame = tk.Frame(tab_manut, bg="#0d0d1a")
+        prog_m_frame.pack(fill="x", padx=16, pady=(10, 2))
+        self._manut_lbl_status = tk.Label(prog_m_frame, text="Clique em Verificar ou Atualizar",
+                                          bg="#0d0d1a", fg="#fdcb6e",
+                                          font=("Segoe UI", 10, "bold"), anchor="w")
+        self._manut_lbl_status.pack(fill="x")
+        self._manut_progress = ttk.Progressbar(prog_m_frame, mode="determinate")
+        self._manut_progress.pack(fill="x", pady=(4, 0))
+        self._manut_lbl_pct = tk.Label(prog_m_frame, text="", bg="#0d0d1a", fg="#7a7a9d",
+                                       font=("Segoe UI", 8), anchor="e")
+        self._manut_lbl_pct.pack(fill="x")
+
+        # Área de conteúdo com scroll
+        canvas_m = tk.Canvas(tab_manut, bg="#0d0d1a", highlightthickness=0)
+        vsb_m = ttk.Scrollbar(tab_manut, orient="vertical", command=canvas_m.yview)
+        canvas_m.configure(yscrollcommand=vsb_m.set)
+        vsb_m.pack(side="right", fill="y")
+        canvas_m.pack(fill="both", expand=True)
+
+        inner_m = tk.Frame(canvas_m, bg="#0d0d1a")
+        win_m = canvas_m.create_window((0, 0), window=inner_m, anchor="nw")
+        inner_m.bind("<Configure>", lambda e: canvas_m.configure(scrollregion=canvas_m.bbox("all")))
+        canvas_m.bind("<Configure>", lambda e: canvas_m.itemconfig(win_m, width=e.width))
+
+        # Plugins a verificar
+        self._manut_plugins = [
+            ("yt-dlp",       "pip", "Baixador de vídeos do YouTube"),
+            ("yt-dlp-ejs",   "pip", "Solver JavaScript anti-bot"),
+            ("openai",       "pip", "API de IA para identificação"),
+            ("Pillow",       "pip", "Processamento de imagens"),
+            ("requests",     "pip", "Requisições HTTP"),
+            ("static-ffmpeg","pip", "FFmpeg embutido"),
+            ("node",         "sys", "Runtime JavaScript (necessário para anti-bot)"),
+            ("ffmpeg",       "sys", "Codificador de vídeo/áudio"),
+        ]
+
+        self._manut_labels = {}
+        self._manut_status = {}
+        self._manut_bars = {}
+
+        for nome, tipo, desc in self._manut_plugins:
+            card = tk.Frame(inner_m, bg="#16213e", pady=8, padx=12)
+            card.pack(fill="x", padx=16, pady=4)
+
+            # Linha superior: nome + descrição
+            row1 = tk.Frame(card, bg="#16213e")
+            row1.pack(fill="x")
+
+            tk.Label(row1, text=f"📦 {nome}", font=("Segoe UI", 11, "bold"),
+                     bg="#16213e", fg="#e8e8ff").pack(side="left")
+            tk.Label(row1, text=f"  —  {desc}", font=("Segoe UI", 9),
+                     bg="#16213e", fg="#7a7a9d").pack(side="left", padx=(8, 0))
+
+            # Linha: versão + status + botão
+            row2 = tk.Frame(card, bg="#16213e")
+            row2.pack(fill="x", pady=(4, 0))
+
+            lbl_ver = tk.Label(row2, text="Versão: ...", font=("Consolas", 9),
+                               bg="#16213e", fg="#7a7a9d")
+            lbl_ver.pack(side="left")
+
+            lbl_st = tk.Label(row2, text="", font=("Segoe UI", 9, "bold"),
+                              bg="#16213e", fg="#7a7a9d")
+            lbl_st.pack(side="left", padx=(12, 0))
+
+            self._manut_labels[nome] = lbl_ver
+            self._manut_status[nome] = lbl_st
+
+            if tipo == "pip":
+                tk.Button(row2, text="⬆ Atualizar", font=("Segoe UI", 8, "bold"),
+                          bg="#0984e3", fg="white", relief="flat", padx=8, pady=2,
+                          cursor="hand2",
+                          command=lambda n=nome: self._atualizar_plugin(n)).pack(side="right", padx=4)
+            elif nome == "node":
+                tk.Button(row2, text="⬆ Instalar Node.js", font=("Segoe UI", 8, "bold"),
+                          bg="#00b894", fg="white", relief="flat", padx=8, pady=2,
+                          cursor="hand2",
+                          command=self._instalar_node).pack(side="right", padx=4)
+
+            # Barra de progresso individual por plugin
+            bar = ttk.Progressbar(card, mode="indeterminate", length=200)
+            bar.pack(fill="x", pady=(4, 0))
+            bar.pack_forget()  # escondida até precisar
+            self._manut_bars[nome] = bar
+
+        # Rodapé com botões gerais
+        rod_m = tk.Frame(tab_manut, bg="#16213e", pady=10)
+        rod_m.pack(fill="x", side="bottom")
+
+        tk.Button(rod_m, text="🔍 Verificar Tudo", font=("Segoe UI", 10, "bold"),
+                  bg="#e040fb", fg="white", relief="flat", padx=20, pady=6,
+                  cursor="hand2",
+                  command=self._verificar_plugins).pack(side="left", padx=16)
+
+        tk.Button(rod_m, text="⬆ Atualizar Tudo", font=("Segoe UI", 10, "bold"),
+                  bg="#00b894", fg="white", relief="flat", padx=20, pady=6,
+                  cursor="hand2",
+                  command=self._atualizar_todos_plugins).pack(side="left", padx=4)
+
+        self._manut_log = tk.Label(rod_m, text="", bg="#16213e", fg="#7a7a9d",
+                                   font=("Segoe UI", 9))
+        self._manut_log.pack(side="right", padx=16)
+
+        # Verificar ao abrir a aba
+        nb.bind("<<NotebookTabChanged>>", lambda e: (
+            self._verificar_plugins() if nb.index("current") == 3 else None
+        ))
+
+    # ── Conversão — funções ──────────────────────────────────
+
+    _EXTENSOES_VIDEO = {
+        ".mp4", ".avi", ".mkv", ".mov", ".wmv", ".flv",
+        ".webm", ".m4v", ".mpg", ".mpeg", ".3gp", ".ts",
+        ".vob", ".ogv", ".rm", ".rmvb", ".divx", ".asf",
+        ".mp3", ".wma", ".ogg", ".aac", ".wav", ".flac",
+        ".m4a", ".opus",
+    }
+
+    def _conv_selecionar_pasta(self):
+        pasta = filedialog.askdirectory(title="Selecione a pasta com os vídeos")
+        if pasta:
+            self._conv_pasta_var.set(pasta)
+
+    def _conv_cancelar(self):
+        self._conv_cancelar_flag = True
+        self._conv_lbl_status.config(text="⏳ Cancelando...")
+
+    def _conv_log_msg(self, texto, tag=None):
+        self._conv_log.insert("end", texto + "\n", tag)
+        self._conv_log.see("end")
+
+    def _conv_set_stat(self, chave, valor):
+        if chave in self._conv_stats:
+            self._conv_stats[chave].config(text=str(valor))
+
+    def _conv_set_progresso(self, atual, total):
+        if total > 0:
+            pct = (atual / total) * 100
+            self._conv_progress["value"] = pct
+            self._conv_lbl_pct.config(text=f"{atual}/{total}  ({pct:.0f}%)")
+
+    @staticmethod
+    def _conv_formatar_tamanho(b):
+        if b is None or b == 0:
+            return "0 B"
+        for u in ["B", "KB", "MB", "GB"]:
+            if b < 1024:
+                return f"{b:.1f} {u}"
+            b /= 1024
+        return f"{b:.1f} TB"
+
+    @staticmethod
+    def _conv_obter_info(caminho):
+        try:
+            r = subprocess.run(
+                ["ffprobe", "-v", "quiet", "-print_format", "json",
+                 "-show_format", "-show_streams", str(caminho)],
+                capture_output=True, text=True, timeout=30)
+            return json.loads(r.stdout) if r.returncode == 0 else None
+        except Exception:
+            return None
+
+    @staticmethod
+    def _conv_verificar_integridade(caminho):
+        try:
+            r = subprocess.run(
+                ["ffmpeg", "-v", "error", "-i", str(caminho), "-f", "null", "-"],
+                capture_output=True, text=True, timeout=600)
+            erros = [l for l in r.stderr.strip().splitlines() if l.strip()]
+            if r.returncode != 0 and not erros:
+                return False, "Não decodificável"
+            if len(erros) > 5:
+                return False, f"{len(erros)} erros (corrompido)"
+            info = App._conv_obter_info(caminho)
+            if info is None:
+                return False, "Metadados ilegíveis"
+            streams = info.get("streams", [])
+            if not any(s.get("codec_type") in ("video", "audio") for s in streams):
+                return False, "Sem stream de mídia"
+            try:
+                dur = float(info.get("format", {}).get("duration", 0))
+                if dur < 1.0:
+                    return False, f"Duração {dur:.1f}s"
+            except (ValueError, TypeError):
+                pass
+            return True, f"OK ({len(erros)} avisos)" if erros else (True, "OK")
+        except subprocess.TimeoutExpired:
+            return False, "Timeout"
+        except Exception as e:
+            return False, str(e)
+
+    def _conv_iniciar(self, modo):
+        pasta = self._conv_pasta_var.get().strip()
+        if not pasta:
+            messagebox.showwarning("Atenção", "Selecione uma pasta primeiro!")
+            return
+        if not os.path.isdir(pasta):
+            messagebox.showerror("Erro", f"Pasta não encontrada:\n{pasta}")
+            return
+        if self._conv_executando:
+            return
+
+        self._conv_executando = True
+        self._conv_cancelar_flag = False
+        self._conv_btn_verificar.config(state="disabled")
+        self._conv_btn_converter.config(state="disabled")
+        self._conv_btn_cancelar.config(state="normal")
+        self._conv_log.delete("1.0", "end")
+        self._conv_progress["value"] = 0
+        for k in self._conv_stats:
+            self._conv_set_stat(k, 0)
+
+        if modo == "verificar":
+            threading.Thread(target=self._conv_tarefa_verificar, args=(pasta,), daemon=True).start()
+        else:
+            threading.Thread(target=self._conv_tarefa_converter, args=(pasta,), daemon=True).start()
+
+    def _conv_finalizar(self):
+        self._conv_executando = False
+        self._conv_cancelar_flag = False
+        self._conv_btn_verificar.config(state="normal")
+        self._conv_btn_converter.config(state="normal")
+        self._conv_btn_cancelar.config(state="disabled")
+
+    def _conv_listar_midias(self, pasta):
+        arquivos = []
+        for arq in sorted(os.scandir(pasta), key=lambda e: e.name):
+            if arq.is_dir():
+                arquivos.extend(self._conv_listar_midias(arq.path))
+            elif arq.is_file() and os.path.splitext(arq.name)[1].lower() in self._EXTENSOES_VIDEO:
+                arquivos.append(arq.path)
+        return arquivos
+
+    def _conv_tarefa_verificar(self, pasta):
+        self.after(0, lambda: self._conv_lbl_status.config(text="🔍 Escaneando..."))
+        self.after(0, lambda: self._conv_log_msg("═" * 50, "titulo"))
+        self.after(0, lambda: self._conv_log_msg("  VERIFICAÇÃO DE INTEGRIDADE", "titulo"))
+        self.after(0, lambda: self._conv_log_msg("═" * 50, "titulo"))
+
+        arquivos = self._conv_listar_midias(pasta)
+        total = len(arquivos)
+        self.after(0, lambda: self._conv_set_stat("total", total))
+        self.after(0, lambda: self._conv_log_msg(f"\n  {total} arquivo(s)\n"))
+
+        if not total:
+            self.after(0, lambda: self._conv_lbl_status.config(text="Nenhum arquivo"))
+            self.after(0, self._conv_finalizar)
+            return
+
+        bons = 0
+        ruins = []
+
+        for i, arq in enumerate(arquivos, 1):
+            if self._conv_cancelar_flag:
+                self.after(0, lambda: self._conv_log_msg("\n⛔ Cancelado", "aviso"))
+                break
+
+            nome = os.path.basename(arq)
+            tam = self._conv_formatar_tamanho(os.path.getsize(arq))
+            self.after(0, lambda n=nome: self._conv_lbl_arquivo.config(text=n))
+            self.after(0, lambda i=i, t=total: self._conv_set_progresso(i, t))
+            self.after(0, lambda i=i, t=total: self._conv_lbl_status.config(
+                text=f"🔍 Verificando {i}/{t}..."))
+
+            ok, motivo = self._conv_verificar_integridade(arq)
+            if ok:
+                bons += 1
+                self.after(0, lambda b=bons: self._conv_set_stat("bons", b))
+                self.after(0, lambda n=nome, m=motivo:
+                           self._conv_log_msg(f"  ✓ {n}  —  {m}", "ok"))
+            else:
+                ruins.append((arq, motivo))
+                self.after(0, lambda r=len(ruins): self._conv_set_stat("ruins", r))
+                self.after(0, lambda n=nome, m=motivo:
+                           self._conv_log_msg(f"  ✗ {n}  —  {m}", "erro"))
+
+        if ruins and not self._conv_cancelar_flag:
+            espaco = sum(os.path.getsize(a) for a, _ in ruins)
+            def _perguntar():
+                resp = messagebox.askyesno(
+                    "Excluir corrompidos?",
+                    f"{len(ruins)} arquivo(s) corrompido(s).\n"
+                    f"Espaço: {self._conv_formatar_tamanho(espaco)}\n\nExcluir?")
+                if resp:
+                    exc = 0
+                    for arq, _ in ruins:
+                        try:
+                            os.remove(arq)
+                            exc += 1
+                            self._conv_log_msg(f"  🗑 {os.path.basename(arq)}", "aviso")
+                        except Exception as e:
+                            self._conv_log_msg(f"  Erro: {e}", "erro")
+                    self._conv_log_msg(f"\n  {exc} excluído(s)!", "ok")
+                self._conv_lbl_status.config(text="✅ Verificação concluída")
+                self._conv_finalizar()
+            self.after(0, _perguntar)
+        else:
+            self.after(0, lambda: self._conv_lbl_status.config(text="✅ Verificação concluída"))
+            self.after(0, self._conv_finalizar)
+
+    def _conv_tarefa_converter(self, pasta):
+        resolucao = int(self._conv_resolucao.get())
+        self.after(0, lambda: self._conv_lbl_status.config(text="🔄 Escaneando..."))
+        self.after(0, lambda: self._conv_log_msg("═" * 50, "titulo"))
+        self.after(0, lambda: self._conv_log_msg(
+            f"  CONVERSÃO PARA {resolucao}p H.264", "titulo"))
+        self.after(0, lambda: self._conv_log_msg("═" * 50, "titulo"))
+
+        arquivos = self._conv_listar_midias(pasta)
+        total = len(arquivos)
+        self.after(0, lambda: self._conv_set_stat("total", total))
+
+        if not total:
+            self.after(0, lambda: self._conv_lbl_status.config(text="Nenhum arquivo"))
+            self.after(0, self._conv_finalizar)
+            return
+
+        # Fase 1: Classificar
+        self.after(0, lambda: self._conv_log_msg(f"\n  Classificando {total} arquivo(s)...\n", "info"))
+        a_converter = []
+        pulados = 0
+        ruins = 0
+
+        for i, arq in enumerate(arquivos, 1):
+            if self._conv_cancelar_flag:
+                break
+            self.after(0, lambda i=i, t=total: self._conv_set_progresso(i, t))
+            self.after(0, lambda n=os.path.basename(arq): self._conv_lbl_arquivo.config(text=n))
+            self.after(0, lambda i=i, t=total: self._conv_lbl_status.config(
+                text=f"📋 Classificando {i}/{t}..."))
+
+            ok, motivo = self._conv_verificar_integridade(arq)
+            if not ok:
+                ruins += 1
+                self.after(0, lambda r=ruins: self._conv_set_stat("ruins", r))
+                self.after(0, lambda n=os.path.basename(arq), m=motivo:
+                           self._conv_log_msg(f"  ✗ {n} — {m}", "erro"))
+                try:
+                    os.remove(arq)
+                    self.after(0, lambda: self._conv_log_msg("    🗑 Excluído", "aviso"))
+                except Exception:
+                    pass
+                continue
+
+            info = self._conv_obter_info(arq)
+            # Verificar se já está no padrão
+            codec = None
+            altura = None
+            if info:
+                for s in info.get("streams", []):
+                    if s.get("codec_type") == "video":
+                        codec = s.get("codec_name")
+                        altura = s.get("height")
+                        break
+
+            if codec == "h264" and altura is not None and altura <= resolucao and arq.lower().endswith(".mp4"):
+                pulados += 1
+                self.after(0, lambda p=pulados: self._conv_set_stat("pulados", p))
+                self.after(0, lambda n=os.path.basename(arq):
+                           self._conv_log_msg(f"  ⏭ {n} — já no padrão", "ok"))
+            else:
+                a_converter.append((arq, info))
+
+        if self._conv_cancelar_flag or not a_converter:
+            if not a_converter and not self._conv_cancelar_flag:
+                self.after(0, lambda: self._conv_log_msg("\n  ✅ Todos já estão no padrão!", "ok"))
+            self.after(0, lambda: self._conv_lbl_status.config(
+                text="✅ Concluído" if not self._conv_cancelar_flag else "⛔ Cancelado"))
+            self.after(0, self._conv_finalizar)
+            return
+
+        # Fase 2: Converter
+        self.after(0, lambda n=len(a_converter): self._conv_log_msg(
+            f"\n  Convertendo {n} arquivo(s)...\n", "info"))
+        convertidos = 0
+        erros = 0
+
+        for i, (arq, info) in enumerate(a_converter, 1):
+            if self._conv_cancelar_flag:
+                break
+
+            tam_orig = os.path.getsize(arq)
+            nome = os.path.basename(arq)
+            self.after(0, lambda i=i, t=len(a_converter): self._conv_set_progresso(i, t))
+            self.after(0, lambda n=nome: self._conv_lbl_arquivo.config(text=n))
+            self.after(0, lambda i=i, t=len(a_converter): self._conv_lbl_status.config(
+                text=f"🔄 Convertendo {i}/{t}..."))
+            self.after(0, lambda n=nome, t=tam_orig:
+                       self._conv_log_msg(f"  🔄 {n} ({self._conv_formatar_tamanho(t)})", "info"))
+
+            base, _ = os.path.splitext(arq)
+            temp = os.path.join(os.path.dirname(arq), f"_temp_conv_{os.path.basename(base)}.mp4")
+            filtro = f"scale=-2:'min({resolucao},ih)'"
+            cmd = [
+                "ffmpeg", "-i", arq, "-vf", filtro,
+                "-c:v", "libx264", "-preset", "medium", "-crf", "23",
+                "-c:a", "aac", "-b:a", "128k",
+                "-movflags", "+faststart", "-y", temp
+            ]
+            try:
+                t0 = time.time()
+                r = subprocess.run(cmd, capture_output=True, text=True, timeout=7200)
+                dur = time.time() - t0
+                if r.returncode == 0 and os.path.isfile(temp):
+                    tam_novo = os.path.getsize(temp)
+                    try:
+                        os.remove(arq)
+                        destino = base + ".mp4"
+                        os.rename(temp, destino)
+                        red = (1 - tam_novo / tam_orig) * 100 if tam_orig > 0 else 0
+                        convertidos += 1
+                        self.after(0, lambda c=convertidos: self._conv_set_stat("convertidos", c))
+                        self.after(0, lambda to=tam_orig, tn=tam_novo, r=red, d=dur:
+                                   self._conv_log_msg(
+                                       f"    ✓ {self._conv_formatar_tamanho(to)} → "
+                                       f"{self._conv_formatar_tamanho(tn)} ({r:+.0f}%) "
+                                       f"[{int(d)}s]", "ok"))
+                    except Exception as e:
+                        erros += 1
+                        self.after(0, lambda e=str(e):
+                                   self._conv_log_msg(f"    ✗ Erro: {e}", "erro"))
+                        if os.path.isfile(temp):
+                            os.remove(temp)
+                else:
+                    erros += 1
+                    self.after(0, lambda: self._conv_log_msg("    ✗ Falhou", "erro"))
+                    if os.path.isfile(temp):
+                        os.remove(temp)
+            except subprocess.TimeoutExpired:
+                erros += 1
+                self.after(0, lambda: self._conv_log_msg("    ✗ Timeout", "erro"))
+                if os.path.isfile(temp):
+                    os.remove(temp)
+
+        self.after(0, lambda c=convertidos, e=erros, p=pulados, r=ruins:
+                   self._conv_log_msg(
+                       f"\n{'═' * 50}\n"
+                       f"  Convertidos: {c} | Pulados: {p} | Ruins: {r} | Erros: {e}",
+                       "titulo"))
+        self.after(0, lambda: self._conv_lbl_status.config(text="✅ Conversão concluída"))
+        self.after(0, self._conv_finalizar)
+
+    # ── Manutenção — funções ───────────────────────────────
+
+    def _manut_mostrar_bar(self, nome):
+        self._manut_bars[nome].pack(fill="x", pady=(4, 0))
+        self._manut_bars[nome].start(15)
+
+    def _manut_esconder_bar(self, nome):
+        self._manut_bars[nome].stop()
+        self._manut_bars[nome].pack_forget()
+
+    def _manut_set_progresso(self, atual, total):
+        if total > 0:
+            pct = (atual / total) * 100
+            self._manut_progress["value"] = pct
+            self._manut_lbl_pct.config(text=f"{atual}/{total}  ({pct:.0f}%)")
+
+    def _verificar_plugins(self):
+        """Verifica versão de todos os plugins com barra de progresso."""
+        total = len(self._manut_plugins)
+        self._manut_progress["value"] = 0
+        self._manut_lbl_status.config(text="🔍 Verificando plugins...", fg="#fdcb6e")
+        self._manut_log.config(text="")
+
+        def _run():
+            for i, (nome, tipo, _) in enumerate(self._manut_plugins, 1):
+                self.after(0, lambda i=i, t=total, n=nome: (
+                    self._manut_set_progresso(i, t),
+                    self._manut_lbl_status.config(text=f"🔍 Verificando {n}... ({i}/{t})")
+                ))
+                try:
+                    if tipo == "pip":
+                        r = subprocess.run(
+                            ["pip", "show", nome],
+                            capture_output=True, text=True, timeout=15
+                        )
+                        if r.returncode == 0:
+                            versao = "?"
+                            for linha in r.stdout.splitlines():
+                                if linha.startswith("Version:"):
+                                    versao = linha.split(":", 1)[1].strip()
+                                    break
+                            self.after(0, lambda n=nome, v=versao: (
+                                self._manut_labels[n].config(text=f"Versão: {v}"),
+                                self._manut_status[n].config(text="✓ Instalado", fg="#00e676")
+                            ))
+                        else:
+                            self.after(0, lambda n=nome: (
+                                self._manut_labels[n].config(text="Versão: —"),
+                                self._manut_status[n].config(text="✗ Não instalado", fg="#ff1744")
+                            ))
+                    elif tipo == "sys":
+                        cmd = [nome, "--version"]
+                        r = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+                        if r.returncode == 0:
+                            ver_text = (r.stdout + r.stderr).strip().splitlines()[0][:40]
+                            self.after(0, lambda n=nome, v=ver_text: (
+                                self._manut_labels[n].config(text=f"Versão: {v}"),
+                                self._manut_status[n].config(text="✓ Instalado", fg="#00e676")
+                            ))
+                        else:
+                            self.after(0, lambda n=nome: (
+                                self._manut_labels[n].config(text="Versão: —"),
+                                self._manut_status[n].config(text="✗ Não encontrado", fg="#ff1744")
+                            ))
+                except FileNotFoundError:
+                    self.after(0, lambda n=nome: (
+                        self._manut_labels[n].config(text="Versão: —"),
+                        self._manut_status[n].config(text="✗ Não encontrado", fg="#ff1744")
+                    ))
+                except Exception as e:
+                    self.after(0, lambda n=nome, e=str(e)[:30]: (
+                        self._manut_labels[n].config(text=f"Erro: {e}"),
+                        self._manut_status[n].config(text="⚠ Erro", fg="#fdcb6e")
+                    ))
+
+            self.after(0, lambda: (
+                self._manut_lbl_status.config(text="✅ Verificação concluída", fg="#00e676"),
+                self._manut_log.config(text="✅ Tudo verificado", fg="#00e676"),
+                self._manut_progress.configure(value=100),
+                self._manut_lbl_pct.config(text=f"{total}/{total}  (100%)")
+            ))
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _atualizar_plugin(self, nome):
+        """Atualiza um plugin pip com barra de progresso."""
+        self._manut_status[nome].config(text="⏳ Atualizando...", fg="#fdcb6e")
+        self.after(0, lambda: self._manut_mostrar_bar(nome))
+        self._manut_lbl_status.config(text=f"⬆ Atualizando {nome}...", fg="#fdcb6e")
+        self._manut_progress["value"] = 0
+
+        def _run():
+            try:
+                # Simular progresso durante pip install
+                self.after(0, lambda: self._manut_set_progresso(1, 3))
+                r = subprocess.run(
+                    ["pip", "install", "--upgrade", nome],
+                    capture_output=True, text=True, timeout=300
+                )
+                self.after(0, lambda: self._manut_set_progresso(2, 3))
+                if r.returncode == 0:
+                    self.after(0, lambda: (
+                        self._manut_status[nome].config(text="✓ Atualizado!", fg="#00e676"),
+                        self._manut_esconder_bar(nome),
+                        self._manut_set_progresso(3, 3),
+                        self._manut_lbl_status.config(text=f"✅ {nome} atualizado!", fg="#00e676")
+                    ))
+                else:
+                    erro = r.stderr.strip().splitlines()[-1][:40] if r.stderr else "Erro"
+                    self.after(0, lambda e=erro: (
+                        self._manut_status[nome].config(text=f"✗ {e}", fg="#ff1744"),
+                        self._manut_esconder_bar(nome),
+                        self._manut_lbl_status.config(text=f"✗ Erro ao atualizar {nome}", fg="#ff1744")
+                    ))
+            except Exception as e:
+                self.after(0, lambda e=str(e)[:30]: (
+                    self._manut_status[nome].config(text=f"✗ {e}", fg="#ff1744"),
+                    self._manut_esconder_bar(nome)
+                ))
+
+            time.sleep(1)
+            self.after(0, self._verificar_plugins)
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _atualizar_todos_plugins(self):
+        """Atualiza todos os plugins pip com barra de progresso."""
+        plugins_pip = [(n, t, d) for n, t, d in self._manut_plugins if t == "pip"]
+        total = len(plugins_pip)
+        self._manut_progress["value"] = 0
+        self._manut_lbl_status.config(text=f"⬆ Atualizando 0/{total}...", fg="#fdcb6e")
+        self._manut_log.config(text="")
+
+        # Mostrar todas as barras
+        for nome, _, _ in plugins_pip:
+            self.after(0, lambda n=nome: self._manut_mostrar_bar(n))
+
+        def _run():
+            for i, (nome, _, _) in enumerate(plugins_pip, 1):
+                self.after(0, lambda i=i, t=total, n=nome: (
+                    self._manut_set_progresso(i, t),
+                    self._manut_lbl_status.config(text=f"⬆ Atualizando {n}... ({i}/{t})")
+                ))
+                self.after(0, lambda n=nome: self._manut_status[n].config(
+                    text="⏳ Atualizando...", fg="#fdcb6e"))
+                try:
+                    r = subprocess.run(
+                        ["pip", "install", "--upgrade", nome],
+                        capture_output=True, text=True, timeout=300
+                    )
+                    if r.returncode == 0:
+                        self.after(0, lambda n=nome: (
+                            self._manut_status[n].config(text="✓ Atualizado!", fg="#00e676"),
+                            self._manut_esconder_bar(n)
+                        ))
+                    else:
+                        self.after(0, lambda n=nome: (
+                            self._manut_status[n].config(text="✗ Falhou", fg="#ff1744"),
+                            self._manut_esconder_bar(n)
+                        ))
+                except Exception:
+                    self.after(0, lambda n=nome: (
+                        self._manut_status[n].config(text="✗ Erro", fg="#ff1744"),
+                        self._manut_esconder_bar(n)
+                    ))
+
+            self.after(0, lambda: (
+                self._manut_lbl_status.config(text="✅ Todos atualizados!", fg="#00e676"),
+                self._manut_log.config(text="✅ Tudo atualizado!", fg="#00e676"),
+                self._manut_progress.configure(value=100),
+                self._manut_lbl_pct.config(text=f"{total}/{total}  (100%)")
+            ))
+            time.sleep(1)
+            self.after(0, self._verificar_plugins)
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _instalar_node(self):
+        """Instala Node.js via winget com barra de progresso."""
+        self._manut_status["node"].config(text="⏳ Instalando...", fg="#fdcb6e")
+        self.after(0, lambda: self._manut_mostrar_bar("node"))
+        self._manut_lbl_status.config(text="⬆ Instalando Node.js (pode demorar)...", fg="#fdcb6e")
+        self._manut_progress["value"] = 0
+
+        def _run():
+            self.after(0, lambda: self._manut_set_progresso(1, 4))
+            try:
+                self.after(0, lambda: (
+                    self._manut_set_progresso(1, 4),
+                    self._manut_lbl_status.config(text="⬆ Baixando Node.js...")
+                ))
+                r = subprocess.run(
+                    ["winget", "install", "OpenJS.NodeJS.LTS",
+                     "--accept-package-agreements", "--accept-source-agreements"],
+                    capture_output=True, text=True, timeout=600
+                )
+                self.after(0, lambda: self._manut_set_progresso(3, 4))
+                if r.returncode == 0:
+                    self.after(0, lambda: (
+                        self._manut_status["node"].config(
+                            text="✓ Instalado! Reinicie o app.", fg="#00e676"),
+                        self._manut_esconder_bar("node"),
+                        self._manut_set_progresso(4, 4),
+                        self._manut_lbl_status.config(text="✅ Node.js instalado!", fg="#00e676"),
+                        messagebox.showinfo(
+                            "Node.js instalado",
+                            "Node.js foi instalado com sucesso!\n\n"
+                            "Feche e reabra o programa para que ele seja detectado.")
+                    ))
+                else:
+                    self.after(0, lambda: (
+                        self._manut_status["node"].config(
+                            text="✗ Falhou. Instale manualmente: nodejs.org", fg="#ff1744"),
+                        self._manut_esconder_bar("node"),
+                        self._manut_lbl_status.config(text="✗ Falha na instalação do Node.js", fg="#ff1744")
+                    ))
+            except Exception as e:
+                self.after(0, lambda: (
+                    self._manut_status["node"].config(
+                        text="✗ Instale manualmente: nodejs.org", fg="#ff1744"),
+                    self._manut_esconder_bar("node"),
+                    self._manut_lbl_status.config(text="✗ Erro na instalação", fg="#ff1744")
+                ))
+
+        threading.Thread(target=_run, daemon=True).start()
+
     # ── Ações ───────────────────────────────────────────────
 
     def _toggle_pausa(self):
@@ -2984,29 +3805,7 @@ class App(tk.Tk):
             messagebox.showerror("Erro ao buscar duplicatas", str(e), parent=self)
 
 
-def _criar_atalho_desktop():
-    """Cria atalho na Área de Trabalho do Windows na primeira execução."""
-    if os.name != "nt":
-        return
-    try:
-        import sys, pathlib
-        desktop = pathlib.Path.home() / "Desktop"
-        bat = desktop / "Abrir Voxly.bat"
-        if bat.exists():
-            return
-        script = pathlib.Path(sys.executable).parent / "Scripts" / "voxly.exe"
-        if not script.exists():
-            script = pathlib.Path(sys.executable)
-        bat.write_text(
-            f'@echo off\n"{script}" -c "from renomear_musicas import main; main()"\nif errorlevel 1 pause\n',
-            encoding="utf-8",
-        )
-    except Exception:
-        pass
-
-
 def main():
-    _criar_atalho_desktop()
     App().mainloop()
 
 if __name__ == "__main__":
