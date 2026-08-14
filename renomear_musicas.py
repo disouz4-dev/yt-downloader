@@ -2701,8 +2701,23 @@ class App(tk.Tk):
 
             if r.returncode != 0 and not erros:
                 return False, "Não decodificável"
-            if len(erros) > 5:
-                return False, f"{len(erros)} erros (corrompido)"
+
+            # Zero tolerância — qualquer erro = arquivo ruim
+            if erros:
+                # Classificar o tipo de problema
+                texto_erros = "\n".join(erros[:3])
+                if any(x in texto_erros.lower() for x in ["missing picture", "concealing"]):
+                    tipo = "pulando/frames faltando"
+                elif any(x in texto_erros.lower() for x in ["non monotonically", "dts", "pts"]):
+                    tipo = "timeline quebrada (pula)"
+                elif any(x in texto_erros.lower() for x in ["invalid data", "corrupt"]):
+                    tipo = "dados corrompidos"
+                elif any(x in texto_erros.lower() for x in ["error while decoding", "decode"]):
+                    tipo = "erro de decodificação"
+                else:
+                    tipo = "com defeito"
+                return False, f"{len(erros)} erro(s) — {tipo}"
+
             info = App._conv_obter_info(caminho)
             if info is None:
                 return False, "Metadados ilegíveis"
@@ -2715,7 +2730,7 @@ class App(tk.Tk):
                     return False, f"Duração {dur:.1f}s"
             except (ValueError, TypeError):
                 pass
-            return True, f"OK ({len(erros)} avisos)" if erros else (True, "OK")
+            return True, "OK — perfeito"
         except subprocess.TimeoutExpired:
             return False, "Timeout"
         except Exception as e:
