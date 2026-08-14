@@ -2632,6 +2632,43 @@ class App(tk.Tk):
             b /= 1024
         return f"{b:.1f} TB"
 
+    # Cache da detecção de GPU — só testa uma vez
+    _gpu_hwaccel = None
+
+    @staticmethod
+    def _detectar_gpu():
+        """Detecta se há GPU NVIDIA (CUDA/NVDEC) disponível para aceleração."""
+        if App._gpu_hwaccel is not None:
+            return App._gpu_hwaccel
+
+        # Testar CUDA (NVIDIA)
+        try:
+            r = subprocess.run(
+                ["ffmpeg", "-hide_banner", "-hwaccels"],
+                capture_output=True, text=True, timeout=10)
+            saida = r.stdout.lower()
+            if "cuda" in saida:
+                # Confirmar que funciona de verdade
+                r2 = subprocess.run(
+                    ["ffmpeg", "-hide_banner", "-hwaccel", "cuda",
+                     "-f", "lavfi", "-i", "nullsrc=s=64x64:d=0.1",
+                     "-f", "null", "-"],
+                    capture_output=True, text=True, timeout=10)
+                if r2.returncode == 0:
+                    App._gpu_hwaccel = "cuda"
+                    return "cuda"
+            if "dxva2" in saida:
+                App._gpu_hwaccel = "dxva2"
+                return "dxva2"
+            if "d3d11va" in saida:
+                App._gpu_hwaccel = "d3d11va"
+                return "d3d11va"
+        except Exception:
+            pass
+
+        App._gpu_hwaccel = ""
+        return ""
+
     @staticmethod
     def _conv_obter_info(caminho):
         try:
@@ -2646,10 +2683,22 @@ class App(tk.Tk):
     @staticmethod
     def _conv_verificar_integridade(caminho):
         try:
-            r = subprocess.run(
-                ["ffmpeg", "-v", "error", "-i", str(caminho), "-f", "null", "-"],
-                capture_output=True, text=True, timeout=600)
+            # Montar comando com aceleração por GPU se disponível
+            gpu = App._detectar_gpu()
+            cmd = ["ffmpeg", "-v", "error"]
+            if gpu:
+                cmd += ["-hwaccel", gpu]
+            cmd += ["-i", str(caminho), "-f", "null", "-"]
+
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
             erros = [l for l in r.stderr.strip().splitlines() if l.strip()]
+
+            # Se hwaccel falhou, tentar sem GPU (fallback)
+            if r.returncode != 0 and gpu:
+                cmd_cpu = ["ffmpeg", "-v", "error", "-i", str(caminho), "-f", "null", "-"]
+                r = subprocess.run(cmd_cpu, capture_output=True, text=True, timeout=600)
+                erros = [l for l in r.stderr.strip().splitlines() if l.strip()]
+
             if r.returncode != 0 and not erros:
                 return False, "Não decodificável"
             if len(erros) > 5:
@@ -2720,6 +2769,15 @@ class App(tk.Tk):
         self.after(0, lambda: self._conv_log_msg("  VERIFICAÇÃO DE INTEGRIDADE", "titulo"))
         self.after(0, lambda: self._conv_log_msg("═" * 50, "titulo"))
 
+        # Detectar GPU
+        gpu = self._detectar_gpu()
+        if gpu:
+            self.after(0, lambda g=gpu: self._conv_log_msg(
+                f"  🚀 Aceleração por GPU: {g.upper()} (NVIDIA)", "ok"))
+        else:
+            self.after(0, lambda: self._conv_log_msg(
+                "  🐢 Sem GPU — usando CPU (mais lento)", "aviso"))
+
         arquivos = self._conv_listar_midias(pasta)
         total = len(arquivos)
         self.after(0, lambda: self._conv_set_stat("total", total))
@@ -2788,6 +2846,14 @@ class App(tk.Tk):
         self.after(0, lambda: self._conv_log_msg(
             f"  CONVERSÃO PARA {resolucao}p H.264", "titulo"))
         self.after(0, lambda: self._conv_log_msg("═" * 50, "titulo"))
+
+        gpu = self._detectar_gpu()
+        if gpu == "cuda":
+            self.after(0, lambda: self._conv_log_msg(
+                "  🚀 NVIDIA NVENC detectado — conversão acelerada por GPU!", "ok"))
+        else:
+            self.after(0, lambda: self._conv_log_msg(
+                "  🐢 Sem GPU NVIDIA — convertendo por CPU", "aviso"))
 
         arquivos = self._conv_listar_midias(pasta)
         total = len(arquivos)
@@ -2874,12 +2940,25 @@ class App(tk.Tk):
             base, _ = os.path.splitext(arq)
             temp = os.path.join(os.path.dirname(arq), f"_temp_conv_{os.path.basename(base)}.mp4")
             filtro = f"scale=-2:'min({resolucao},ih)'"
-            cmd = [
-                "ffmpeg", "-i", arq, "-vf", filtro,
-                "-c:v", "libx264", "-preset", "medium", "-crf", "23",
-                "-c:a", "aac", "-b:a", "128k",
-                "-movflags", "+faststart", "-y", temp
-            ]
+            gpu = self._detectar_gpu()
+
+            if gpu == "cuda":
+                # NVIDIA NVENC — ~5-10x mais rápido que CPU
+                cmd = [
+                    "ffmpeg", "-hwaccel", "cuda", "-i", arq,
+                    "-vf", filtro,
+                    "-c:v", "h264_nvenc", "-preset", "p4", "-cq", "23",
+                    "-c:a", "aac", "-b:a", "128k",
+                    "-movflags", "+faststart", "-y", temp
+                ]
+            else:
+                # CPU (fallback)
+                cmd = [
+                    "ffmpeg", "-i", arq, "-vf", filtro,
+                    "-c:v", "libx264", "-preset", "medium", "-crf", "23",
+                    "-c:a", "aac", "-b:a", "128k",
+                    "-movflags", "+faststart", "-y", temp
+                ]
             try:
                 t0 = time.time()
                 r = subprocess.run(cmd, capture_output=True, text=True, timeout=7200)
